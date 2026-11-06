@@ -207,6 +207,7 @@ struct v4l2r_decoder {
 	 * rejects it at decode time, so probe it up front and gate Main10. */
 	bool hevc_10bit;
 	bool h264_10bit;
+	bool vp9_10bit;
 };
 
 /*
@@ -517,6 +518,10 @@ enum v4l2r_h264_high10_mode {
 };
 
 bool v4l2r_probe_h264_10bit(int fd, uint32_t output_type);
+bool v4l2r_probe_hevc_10bit(int fd, uint32_t output_type);
+bool v4l2r_probe_vp9_10bit(int fd, uint32_t output_type);
+bool v4l2r_decoder_supports_profile(const struct v4l2r_decoder *decoder,
+				    VAProfile profile);
 
 /* --- in-driver concurrency instrumentation (api.c); issue #36, AC2 ---
  *

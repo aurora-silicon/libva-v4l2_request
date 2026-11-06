@@ -111,6 +111,15 @@ if conf.get('HAVE_V4L2_CTRL_HEVC') == 1
   endforeach
 endif
 
+if conf.get('HAVE_V4L2_CTRL_HEVC') == 1 or conf.get('HAVE_V4L2_CTRL_VP9') == 1
+  profile_capability = executable('profile-capability', 'profile-capability.c', driver_sources,
+    c_args: ['-UNDEBUG'],
+    include_directories: [root_inc, include_directories('../src')],
+    dependencies: [libva_dep, libdrm_dep, threads_dep],
+    link_args: ['-Wl,--wrap=ioctl'])
+  test('profile-capability', profile_capability, timeout: 30)
+endif
+
 if conf.get('HAVE_V4L2_CTRL_VP9') == 1
   vp9 = executable('vp9', 'vp9.c', driver_sources,
     c_args: ['-UNDEBUG'],

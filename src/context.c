@@ -190,10 +190,8 @@ VAStatus v4l2r_config_dimensions(struct v4l2r_driver *drv,
 	*bounds = (struct v4l2r_dimensions){0};
 	for (unsigned int i = 0; i < drv->nb_decoders; i++) {
 		const struct v4l2r_decoder *decoder = &drv->decoders[i];
-#if VA_CHECK_VERSION(1, 18, 0)
-		if (config->profile == VAProfileH264High10 && !decoder->h264_10bit)
+		if (!v4l2r_decoder_supports_profile(decoder, config->profile))
 			continue;
-#endif
 		bool accepts = false;
 		for (unsigned int j = 0; j < decoder->nb_pixelformats; j++)
 			accepts |= decoder->pixelformats[j] == config->codec->pixelformat;
@@ -1149,10 +1147,8 @@ VAStatus v4l2r_CreateContext(VADriverContextP va_ctx, VAConfigID config_id,
 	status = VA_STATUS_ERROR_OPERATION_FAILED;
 	for (unsigned int i = 0; i < drv->nb_decoders; i++) {
 		decoder = &drv->decoders[i];
-#if VA_CHECK_VERSION(1, 18, 0)
-		if (ctx->profile == VAProfileH264High10 && !decoder->h264_10bit)
+		if (!v4l2r_decoder_supports_profile(decoder, ctx->profile))
 			continue;
-#endif
 
 		ctx->video_fd = open(decoder->video_path, O_RDWR | O_NONBLOCK);
 		if (ctx->video_fd < 0)
