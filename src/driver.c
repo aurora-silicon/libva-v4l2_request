@@ -274,8 +274,10 @@ static bool video_device_has_10bit_capture(int fd, uint32_t output_type)
 			V4L2_BUF_TYPE_VIDEO_CAPTURE,
 	};
 	while (ioctl(fd, VIDIOC_ENUM_FMT, &capture) >= 0) {
-		const struct v4l2r_format_info *info = v4l2r_format_by_pixelformat(capture.pixelformat);
-		if (info && info->bit_depth == 10 && info->va_fourcc && info->rt_format == VA_RT_FORMAT_YUV420_10)
+		const struct v4l2r_format_info *info =
+			v4l2r_format_by_pixelformat(capture.pixelformat);
+		if (info && info->bit_depth == 10 && info->va_fourcc &&
+		    info->rt_format == VA_RT_FORMAT_YUV420_10)
 			return true;
 		capture.index++;
 	}
@@ -358,7 +360,8 @@ bool v4l2r_probe_vp9_10bit(int fd, uint32_t output_type)
 		format.fmt.pix.height = 1088;
 		format.fmt.pix.pixelformat = V4L2_PIX_FMT_VP9_FRAME;
 	}
-	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0 || v4l2r_format_pixelformat(&format) != V4L2_PIX_FMT_VP9_FRAME)
+	if (ioctl(fd, VIDIOC_S_FMT, &format) < 0 ||
+	    v4l2r_format_pixelformat(&format) != V4L2_PIX_FMT_VP9_FRAME)
 		return false;
 	return video_device_has_10bit_capture(fd, output_type);
 #else
@@ -723,12 +726,16 @@ bool v4l2r_decoder_supports_profile(const struct v4l2r_decoder *decoder,
 				    VAProfile profile)
 {
 	switch (profile) {
-	case VAProfileHEVCMain10: return decoder->hevc_10bit;
-	case VAProfileVP9Profile2: return decoder->vp9_10bit;
+	case VAProfileHEVCMain10:
+		return decoder->hevc_10bit;
+	case VAProfileVP9Profile2:
+		return decoder->vp9_10bit;
 #if VA_CHECK_VERSION(1, 18, 0)
-	case VAProfileH264High10: return decoder->h264_10bit;
+	case VAProfileH264High10:
+		return decoder->h264_10bit;
 #endif
-	default: return true;
+	default:
+		return true;
 	}
 }
 
@@ -737,9 +744,11 @@ bool v4l2r_decoder_supports_profile(const struct v4l2r_decoder *decoder,
 static bool driver_supports_profile(struct v4l2r_driver *drv, VAProfile profile)
 {
 	const struct v4l2r_codec *codec = v4l2r_codec_for_profile(profile);
-	if (!codec) return false;
+	if (!codec)
+		return false;
 #if VA_CHECK_VERSION(1, 18, 0)
-	if (profile == VAProfileH264High10 && drv->h264_high10 == V4L2R_H264_HIGH10_OFF)
+	if (profile == VAProfileH264High10 &&
+	    drv->h264_high10 == V4L2R_H264_HIGH10_OFF)
 		return false;
 #endif
 	for (unsigned int i = 0; i < drv->nb_decoders; i++) {
@@ -747,7 +756,8 @@ static bool driver_supports_profile(struct v4l2r_driver *drv, VAProfile profile)
 		bool coded = false;
 		for (unsigned int j = 0; j < decoder->nb_pixelformats; j++)
 			coded |= decoder->pixelformats[j] == codec->pixelformat;
-		if (coded && v4l2r_decoder_supports_profile(decoder, profile)) return true;
+		if (coded && v4l2r_decoder_supports_profile(decoder, profile))
+			return true;
 	}
 	return false;
 }
