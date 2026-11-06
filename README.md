@@ -184,6 +184,9 @@ sudo meson install -C build
   `driverdir` variable (`pkg-config --variable=driverdir libva`; typically `/usr/lib/dri` or
   an arch-tripled `.../dri`). Override it at `meson setup` time with `-Ddriverdir=<path>`
   when packaging for a nonstandard prefix.
+- **Distribution identity**: packagers may set `-Dvendor-string=<name>` to replace the
+  distribution name in `vaQueryVendorString` while retaining the project version. This
+  changes diagnostics only; it does not change device discovery or codec behavior.
 - **Uninstalling**: `sudo ninja -C build uninstall` removes exactly the files `meson install`
   put down, including now-empty parent directories it created; nothing else under the
   prefix is touched.

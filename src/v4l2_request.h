@@ -55,7 +55,7 @@ static inline uint64_t v4l2r_now_ns(void)
 #define V4L2R_MAX_IMAGE_FORMATS		8
 #define V4L2R_MAX_SUBPIC_FORMATS	1
 #define V4L2R_MAX_DISPLAY_ATTRIBUTES	1
-#define V4L2R_STR_VENDOR		"v4l2-request (omarchy-m1-video " V4L2R_VERSION ")"
+#define V4L2R_STR_VENDOR		"v4l2-request (" V4L2R_VENDOR " " V4L2R_VERSION ")"
 
 #define V4L2R_MAX_DECODERS		8
 #define V4L2R_MAX_PIXELFORMATS		16
