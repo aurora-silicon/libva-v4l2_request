@@ -45,6 +45,10 @@ struct av1_context {
 	unsigned int nb_va_slices;
 	unsigned int alloc_va_slices;
 	unsigned int slices_consumed;
+	/* Tile data appended before its VASliceParameterBuffers (Chromium's order): its tiles are built when the
+	 * parameters arrive, against the offset the data was appended at. */
+	bool data_unmatched;
+	uint32_t data_base;
 
 	/*
 	 * One-frame submission deferral. refresh_frame_flags (which DPB slots
@@ -621,6 +625,7 @@ static VAStatus av1_begin_picture(struct v4l2r_context *ctx)
 	codec->num_tiles = 0;
 	codec->nb_va_slices = 0;
 	codec->slices_consumed = 0;
+	codec->data_unmatched = false;
 
 	return VA_STATUS_SUCCESS;
 }
@@ -647,13 +652,10 @@ static VAStatus av1_store_slice_params(struct av1_context *codec,
 	return VA_STATUS_SUCCESS;
 }
 
-static VAStatus av1_process_tiles(struct v4l2r_context *ctx,
-				  struct v4l2r_buffer *buf)
+/* Turn the stored, not yet consumed slice parameters into tiles of data that starts at @base in OUTPUT. */
+static VAStatus av1_consume_slices(struct av1_context *codec, uint32_t base)
 {
-	struct av1_context *codec = ctx->codec_priv;
-	uint32_t base = ctx->pic.output ? ctx->pic.output->bytesused : 0;
 	unsigned int pending = codec->nb_va_slices - codec->slices_consumed;
-	VAStatus status;
 
 	if (codec->num_tiles + pending > V4L2_AV1_MAX_TILE_COUNT)
 		return VA_STATUS_ERROR_OPERATION_FAILED;
@@ -679,11 +681,34 @@ static VAStatus av1_process_tiles(struct v4l2r_context *ctx,
 		codec->slices_consumed++;
 	}
 
+	return VA_STATUS_SUCCESS;
+}
+
+static VAStatus av1_process_tiles(struct v4l2r_context *ctx,
+				  struct v4l2r_buffer *buf)
+{
+	struct av1_context *codec = ctx->codec_priv;
+	uint32_t base = ctx->pic.output ? ctx->pic.output->bytesused : 0;
+	bool matched = codec->slices_consumed < codec->nb_va_slices;
+	VAStatus status;
+
+	if (matched) {
+		codec->data_unmatched = false;
+		status = av1_consume_slices(codec, base);
+		if (status != VA_STATUS_SUCCESS)
+			return status;
+	}
+
 	status = v4l2r_append_output(ctx, buf->data,
 				     (size_t)buf->element_size *
 				     buf->nb_elements);
 	if (status != VA_STATUS_SUCCESS)
 		return status;
+
+	if (!matched) {
+		codec->data_unmatched = true;
+		codec->data_base = base;
+	}
 
 	return VA_STATUS_SUCCESS;
 }
@@ -887,8 +912,14 @@ static VAStatus av1_render_buffer(struct v4l2r_context *ctx,
 		if (codec->has_film_grain)
 			av1_fill_film_grain(codec);
 		return VA_STATUS_SUCCESS;
-	case VASliceParameterBufferType:
-		return av1_store_slice_params(codec, buf);
+	case VASliceParameterBufferType: {
+		VAStatus status = av1_store_slice_params(codec, buf);
+
+		if (status != VA_STATUS_SUCCESS || !codec->data_unmatched)
+			return status;
+		/* Chromium sends one data buffer, then a parameter buffer per tile: keep data_unmatched for the rest. */
+		return av1_consume_slices(codec, codec->data_base);
+	}
 	case VASliceDataBufferType:
 		if (!codec->have_pic)
 			return VA_STATUS_ERROR_OPERATION_FAILED;
