@@ -391,7 +391,9 @@ if conf.get('HAVE_V4L2_CTRL_AV1') == 1
   foreach case : ['basic', 'default', 'default-missing', 'default-foreign', 'failure',
                   'required-missing', 'required-foreign', 'required-failed', 'required-detached',
                   'primary-bounds', 'slot-bounds', 'valid-primary', 'key-default',
-                  'intra-default', 'resilient-default', 'none-default']
+                  'intra-default', 'resilient-default', 'none-default',
+                  'tile-single', 'tile-multi', 'tile-groups', 'tile-reset',
+                  'tile-double-data']
     foreach tracing : ['on', 'off']
       test('av1-reftrace-' + case + '-' + tracing, av1_reftrace,
            args: [case, tracing, meson.current_build_dir() / ('av1-' + case + '-' + tracing + '.controls')], timeout: 15)

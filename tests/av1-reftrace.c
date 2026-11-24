@@ -338,6 +338,199 @@ static void admission_case(const char *name)
     }
 }
 
+/* --- tile order: Chromium appends the tile data before its parameters --- */
+
+struct step { char kind; unsigned int first, count; }; /* 'P' params [first,+count), 'D' bytes */
+
+static VASliceParameterBufferAV1 tile_params[4];
+static unsigned char tile_data[16];
+
+/* Single tile, or 2x2 tiles of 4 bytes in one data buffer, or in two 8-byte data buffers. */
+static void tile_layout(unsigned int tiles_per_buffer, unsigned int nb_tiles)
+{
+    memset(tile_params, 0, sizeof(tile_params));
+    for (unsigned int i = 0; i < nb_tiles; i++) {
+        tile_params[i].slice_data_size = sizeof(tile_data) / nb_tiles;
+        tile_params[i].slice_data_offset = (i % tiles_per_buffer) * tile_params[i].slice_data_size;
+        tile_params[i].tile_row = (uint16_t)(nb_tiles > 1 ? i / 2 : 0);
+        tile_params[i].tile_column = (uint16_t)(nb_tiles > 1 ? i % 2 : 0);
+    }
+    for (unsigned int i = 0; i < sizeof(tile_data); i++)
+        tile_data[i] = (unsigned char)(0xa0 + i);
+}
+
+/* One key picture in the given buffer order, held then flushed: returns its submission index. */
+static unsigned int tile_frame(unsigned int nb_tiles, const struct step *steps, unsigned int nb_steps,
+                               VAStatus expect_end)
+{
+    static unsigned int target;
+    struct v4l2r_buffer buf;
+    unsigned int before = log_count;
+
+    picture(target++ % NB_SURFACES, 0, 0);
+    pic.tile_cols = pic.tile_rows = nb_tiles > 1 ? 2 : 1;
+    assert(v4l2r_picture_begin(ctx, V4L2R_SURFACE_GET(&drv, pic.current_frame)) == VA_STATUS_SUCCESS);
+    ctx->in_picture = true;
+    assert(av1_begin_picture(ctx) == VA_STATUS_SUCCESS);
+    buf = (struct v4l2r_buffer) { .type = VAPictureParameterBufferType,
+        .data = &pic, .nb_elements = 1, .element_size = sizeof(pic) };
+    assert(av1_render_buffer(ctx, &buf) == VA_STATUS_SUCCESS);
+    for (unsigned int i = 0; i < nb_steps; i++) {
+        if (steps[i].kind == 'P')
+            buf = (struct v4l2r_buffer) { .type = VASliceParameterBufferType,
+                .data = &tile_params[steps[i].first], .nb_elements = steps[i].count,
+                .element_size = sizeof(tile_params[0]) };
+        else
+            buf = (struct v4l2r_buffer) { .type = VASliceDataBufferType,
+                .data = &tile_data[steps[i].first], .nb_elements = 1,
+                .element_size = steps[i].count };
+        assert(av1_render_buffer(ctx, &buf) == VA_STATUS_SUCCESS);
+    }
+    assert(av1_end_picture(ctx) == expect_end);
+    ctx->in_picture = false;
+    if (expect_end != VA_STATUS_SUCCESS) {
+        ctx->pic = (struct v4l2r_picture){0};
+        assert(!codec.pend_valid && log_count == before);
+        return ~0u;
+    }
+    ctx->pic = (struct v4l2r_picture){0};
+    assert(av1_flush(ctx, NULL) == VA_STATUS_SUCCESS);
+    assert(log_count == before + 1);
+    return before;
+}
+
+static const struct v4l2_ctrl_av1_tile_group_entry *tile_entries(unsigned int n, unsigned int *count)
+{
+    assert(n < log_count);
+    for (unsigned int i = 0; i < log_[n].count; i++)
+        if (log_[n].ctrl[i].id == V4L2_CID_STATELESS_AV1_TILE_GROUP_ENTRY) {
+            assert(log_[n].ctrl[i].size % sizeof(struct v4l2_ctrl_av1_tile_group_entry) == 0);
+            *count = log_[n].ctrl[i].size / sizeof(struct v4l2_ctrl_av1_tile_group_entry);
+            return log_[n].ctrl[i].data;
+        }
+    abort();
+}
+
+/* The tile list must be the contiguous 0,4,8,12 split (or one 16-byte tile) of the OUTPUT data. */
+static void tile_check(unsigned int n, unsigned int nb_tiles)
+{
+    unsigned int count;
+    const struct v4l2_ctrl_av1_tile_group_entry *t = tile_entries(n, &count);
+
+    assert(count == nb_tiles);
+    for (unsigned int i = 0; i < count; i++) {
+        assert(t[i].tile_offset == i * (sizeof(tile_data) / nb_tiles));
+        assert(t[i].tile_size == sizeof(tile_data) / nb_tiles);
+        assert(t[i].tile_row == (nb_tiles > 1 ? i / 2 : 0));
+        assert(t[i].tile_col == (nb_tiles > 1 ? i % 2 : 0));
+    }
+}
+
+/* Data-first submission must emit the same request controls as params-first submission. */
+static void tile_same(unsigned int a, unsigned int b)
+{
+    assert(log_[a].count == log_[b].count);
+    for (unsigned int i = 0; i < log_[a].count; i++) {
+        assert(log_[a].ctrl[i].id == log_[b].ctrl[i].id);
+        assert(log_[a].ctrl[i].size == log_[b].ctrl[i].size);
+        assert(!memcmp(log_[a].ctrl[i].data, log_[b].ctrl[i].data, log_[a].ctrl[i].size));
+    }
+}
+
+static void tile_order_case(const char *name)
+{
+    unsigned int params_first, data_first;
+
+    if (!strcmp(name, "single")) {
+        const struct step pd[] = { { 'P', 0, 1 }, { 'D', 0, 16 } };
+        const struct step dp[] = { { 'D', 0, 16 }, { 'P', 0, 1 } };
+        tile_layout(1, 1);
+        params_first = tile_frame(1, pd, 2, VA_STATUS_SUCCESS);
+        data_first = tile_frame(1, dp, 2, VA_STATUS_SUCCESS);
+        tile_check(params_first, 1);
+        tile_check(data_first, 1);
+        tile_same(params_first, data_first);
+    } else if (!strcmp(name, "multi")) {
+        /* Chromium: one data buffer for the frame, then one parameter buffer per tile. */
+        const struct step pd[] = { { 'P', 0, 4 }, { 'D', 0, 16 } };
+        const struct step pppd[] = { { 'P', 0, 1 }, { 'P', 1, 1 }, { 'P', 2, 1 }, { 'P', 3, 1 },
+                                     { 'D', 0, 16 } };
+        const struct step dpppp[] = { { 'D', 0, 16 }, { 'P', 0, 1 }, { 'P', 1, 1 }, { 'P', 2, 1 },
+                                      { 'P', 3, 1 } };
+        const struct step dp[] = { { 'D', 0, 16 }, { 'P', 0, 4 } };
+        tile_layout(4, 4);
+        params_first = tile_frame(4, pd, 2, VA_STATUS_SUCCESS);
+        tile_check(params_first, 4);
+        tile_check(tile_frame(4, pppd, 5, VA_STATUS_SUCCESS), 4);
+        tile_same(params_first, params_first + 1);
+        data_first = tile_frame(4, dpppp, 5, VA_STATUS_SUCCESS);
+        tile_check(data_first, 4);
+        tile_same(params_first, data_first);
+        data_first = tile_frame(4, dp, 2, VA_STATUS_SUCCESS);
+        tile_check(data_first, 4);
+        tile_same(params_first, data_first);
+    } else if (!strcmp(name, "groups")) {
+        /* Two data buffers, each followed by its own tiles: offsets are relative to each buffer. */
+        const struct step pd[] = { { 'P', 0, 2 }, { 'D', 0, 8 }, { 'P', 2, 2 }, { 'D', 8, 8 } };
+        const struct step dp[] = { { 'D', 0, 8 }, { 'P', 0, 1 }, { 'P', 1, 1 },
+                                   { 'D', 8, 8 }, { 'P', 2, 1 }, { 'P', 3, 1 } };
+        const struct step mixed[] = { { 'P', 0, 2 }, { 'D', 0, 8 }, { 'D', 8, 8 }, { 'P', 2, 2 } };
+        tile_layout(2, 4);
+        params_first = tile_frame(4, pd, 4, VA_STATUS_SUCCESS);
+        tile_check(params_first, 4);
+        data_first = tile_frame(4, dp, 6, VA_STATUS_SUCCESS);
+        tile_check(data_first, 4);
+        tile_same(params_first, data_first);
+        data_first = tile_frame(4, mixed, 4, VA_STATUS_SUCCESS);
+        tile_check(data_first, 4);
+        tile_same(params_first, data_first);
+    } else if (!strcmp(name, "reset")) {
+        /* A frame ending with unmatched data at offset 8 must not move the next frame's tiles. */
+        const struct step pdd[] = { { 'P', 0, 2 }, { 'D', 0, 8 }, { 'D', 8, 8 }, { 'P', 2, 2 } };
+        const struct step pd[] = { { 'P', 0, 1 }, { 'D', 0, 16 } };
+        const struct step d[] = { { 'D', 0, 16 } };
+        tile_layout(2, 4);
+        tile_check(tile_frame(4, pdd, 4, VA_STATUS_SUCCESS), 4);
+        tile_layout(1, 1);
+        params_first = tile_frame(1, pd, 2, VA_STATUS_SUCCESS);
+        tile_check(params_first, 1);
+        /* Data with no parameters at all still has no tiles to submit, and must not leak into the next frame. */
+        assert(tile_frame(1, d, 1, VA_STATUS_ERROR_OPERATION_FAILED) == ~0u);
+        tile_check(tile_frame(1, pd, 2, VA_STATUS_SUCCESS), 1);
+        tile_same(params_first, log_count - 1);
+    } else if (!strcmp(name, "double-data")) {
+        /* Two consecutive data buffers before any parameters must fail loudly instead of overwriting data_base. */
+        const struct step pd[] = { { 'P', 0, 1 }, { 'D', 0, 16 } };
+        struct v4l2r_buffer buf;
+        tile_layout(1, 1);
+        params_first = tile_frame(1, pd, 2, VA_STATUS_SUCCESS);
+        tile_check(params_first, 1);
+        picture(1, 0, 0);
+        pic.tile_cols = pic.tile_rows = 1;
+        assert(v4l2r_picture_begin(ctx, V4L2R_SURFACE_GET(&drv, pic.current_frame)) == VA_STATUS_SUCCESS);
+        ctx->in_picture = true;
+        assert(av1_begin_picture(ctx) == VA_STATUS_SUCCESS);
+        buf = (struct v4l2r_buffer) { .type = VAPictureParameterBufferType,
+            .data = &pic, .nb_elements = 1, .element_size = sizeof(pic) };
+        assert(av1_render_buffer(ctx, &buf) == VA_STATUS_SUCCESS);
+        buf = (struct v4l2r_buffer) { .type = VASliceDataBufferType,
+            .data = &tile_data[0], .nb_elements = 1, .element_size = 8 };
+        assert(av1_render_buffer(ctx, &buf) == VA_STATUS_SUCCESS);
+        buf = (struct v4l2r_buffer) { .type = VASliceDataBufferType,
+            .data = &tile_data[8], .nb_elements = 1, .element_size = 8 };
+        assert(av1_render_buffer(ctx, &buf) == VA_STATUS_ERROR_OPERATION_FAILED);
+        assert(av1_end_picture(ctx) == VA_STATUS_ERROR_OPERATION_FAILED);
+        ctx->in_picture = false;
+        ctx->pic = (struct v4l2r_picture){0};
+        assert(!codec.pend_valid);
+        /* Next frame must still decode cleanly after the rejected double-data frame. */
+        tile_check(tile_frame(1, pd, 2, VA_STATUS_SUCCESS), 1);
+        tile_same(params_first, log_count - 1);
+    } else
+        abort();
+    assert(requests_queued == log_count);
+}
+
 static pthread_barrier_t gate_barrier;
 static bool gate_expected;
 
@@ -398,6 +591,15 @@ int main(int argc, char **argv)
         assert(!unsetenv("LIBVA_V4L2_TRACE"));
     assert(dup2(fileno(sink), STDERR_FILENO) == STDERR_FILENO);
     setup();
+    if (!strncmp(argv[1], "tile-", 5)) {
+        tile_order_case(argv[1] + 5);
+        snapshot(argv[3]);
+        teardown();
+        log_reset();
+        fclose(sink);
+        printf("PASS %s trace=%s data-first tiles match params-first controls\n", argv[1], argv[2]);
+        return 0;
+    }
     if (!strncmp(argv[1], "required-", 9) || !strcmp(argv[1], "primary-bounds") ||
         !strcmp(argv[1], "slot-bounds") || !strcmp(argv[1], "valid-primary") ||
         !strcmp(argv[1], "key-default") || !strcmp(argv[1], "intra-default") ||
