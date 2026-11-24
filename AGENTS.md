@@ -1,5 +1,7 @@
 # Instructions for coding agents
 
+**Rulebook:** follow the Aurora Silicon rulebook, https://github.com/aurora-silicon/agent-guidelines/blob/main/AGENTS.md. It applies to every agent and contributor, whoever runs them. This file adds the repo specifics.
+
 Read README.md, CONTRIBUTING.md and docs/CONTRIBUTOR_START.md before changing this
 unofficial fork. The live execution/claim authority is
 https://github.com/iconidentify/libva-v4l2_request/issues/8; the roadmap is issue #7.
